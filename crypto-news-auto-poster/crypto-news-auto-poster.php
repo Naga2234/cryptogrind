@@ -14,6 +14,8 @@ function cnap_install() {
     add_option('cnap_count', 3);
     add_option('cnap_sources', array('cryptonewsz'));
     add_option('cnap_stopwords', "Subscribe\nFollow us\nJoin us\nSign up\nNewsletter\nDisclaimer\nAdvertisement");
+    add_option('cnap_cache_ttl', 300);
+    add_option('cnap_log_errors', 0);
     add_option('cnap_stats', array(
         'total_checked' => 0,
         'total_published' => 0,
@@ -149,6 +151,63 @@ function cnap_get_selected_sources() {
     }
 
     return $valid;
+}
+
+function cnap_get_cache_ttl() {
+    $ttl = intval(get_option('cnap_cache_ttl', 300));
+    if ($ttl < 60) {
+        $ttl = 60;
+    }
+    if ($ttl > 300) {
+        $ttl = 300;
+    }
+    return apply_filters('cnap_cache_ttl', $ttl);
+}
+
+function cnap_log_error($message, $context = array()) {
+    $log_enabled = get_option('cnap_log_errors', 0);
+    if (!defined('WP_DEBUG_LOG') || !WP_DEBUG_LOG) {
+        if (!$log_enabled) {
+            return;
+        }
+    }
+
+    $prefix = '[CNAP] ';
+    $details = '';
+    if (!empty($context)) {
+        $details = ' | ' . wp_json_encode($context, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    }
+    error_log($prefix . $message . $details);
+}
+
+function cnap_get_cached_feed_items($source_key, $feed_url) {
+    $transient_key = 'cnap_rss_' . $source_key;
+    $cached = get_transient($transient_key);
+    if ($cached !== false && is_array($cached)) {
+        return $cached;
+    }
+
+    $rss = fetch_feed($feed_url);
+    if (is_wp_error($rss)) {
+        cnap_log_error('fetch_feed error', array(
+            'source' => $source_key,
+            'feed_url' => $feed_url,
+            'error' => $rss->get_error_message()
+        ));
+        return array();
+    }
+
+    $items = $rss->get_items(0, 20);
+    $data = array();
+    foreach ($items as $item) {
+        $data[] = array(
+            'title' => $item->get_title(),
+            'link' => $item->get_permalink()
+        );
+    }
+
+    set_transient($transient_key, $data, cnap_get_cache_ttl());
+    return $data;
 }
 
 function cnap_page() {
@@ -454,19 +513,18 @@ function cnap_get_news() {
         }
 
         $source = $available_sources[$source_key];
-        $rss = fetch_feed($source['feed']);
-        if (is_wp_error($rss)) {
-            continue;
-        }
-
-        $items = $rss->get_items(0, 20);
+        $items = cnap_get_cached_feed_items($source_key, $source['feed']);
         $stats['fetched'] += count($items);
 
         foreach ($items as $item) {
             if ($stats['published'] >= $count) break;
 
-            $title = $item->get_title();
-            $link = $item->get_permalink();
+            $title = isset($item['title']) ? $item['title'] : '';
+            $link = isset($item['link']) ? $item['link'] : '';
+            if (empty($link)) {
+                $stats['skipped']++;
+                continue;
+            }
 
             $exists = get_posts(array(
                 'post_type' => 'post',
@@ -484,6 +542,11 @@ function cnap_get_news() {
             $full = cnap_deep_parse_v35($link, $stopwords);
 
             if (empty($full['content']) || empty($full['featured_image']) || $full['photos_count'] == 0) {
+                cnap_log_error('parsed content empty', array(
+                    'link' => $link,
+                    'title' => $title,
+                    'photos_count' => $full['photos_count']
+                ));
                 $stats['skipped']++;
                 continue;
             }
@@ -518,17 +581,36 @@ function cnap_get_news() {
     $global_stats['last_run'] = date('d.m.Y H:i:s');
     update_option('cnap_stats', $global_stats);
 
+    if ($stats['published'] === 0) {
+        cnap_log_error('cnap_get_news returned zero publications', $stats);
+    }
+
     return $stats;
 }
 
 function cnap_deep_parse_v35($url, $stopwords) {
+    $cache_key = 'cnap_parse_' . md5($url);
+    $cached = get_transient($cache_key);
+    if ($cached !== false && is_array($cached)) {
+        return $cached;
+    }
+
     $result = array('content' => '', 'featured_image' => '', 'photos_count' => 0);
 
     $response = wp_remote_get($url, array('timeout' => 30, 'user-agent' => 'Mozilla/5.0'));
-    if (is_wp_error($response)) return $result;
+    if (is_wp_error($response)) {
+        cnap_log_error('wp_remote_get error', array(
+            'url' => $url,
+            'error' => $response->get_error_message()
+        ));
+        return $result;
+    }
 
     $html = wp_remote_retrieve_body($response);
-    if (empty($html)) return $result;
+    if (empty($html)) {
+        cnap_log_error('empty response body', array('url' => $url));
+        return $result;
+    }
 
     libxml_use_internal_errors(true);
     $dom = new DOMDocument();
@@ -552,7 +634,10 @@ function cnap_deep_parse_v35($url, $stopwords) {
         }
     }
 
-    if (!$content_node) return $result;
+    if (!$content_node) {
+        cnap_log_error('content node not found', array('url' => $url));
+        return $result;
+    }
 
     $remove_selectors = array(
         './/script', './/style', './/*[contains(@class, "share")]',
@@ -618,6 +703,7 @@ function cnap_deep_parse_v35($url, $stopwords) {
     }
 
     if (empty($all_images)) {
+        cnap_log_error('no images found', array('url' => $url));
         return $result;
     }
 
@@ -719,6 +805,7 @@ function cnap_deep_parse_v35($url, $stopwords) {
 
     $result['content'] = trim($content_html);
 
+    set_transient($cache_key, $result, cnap_get_cache_ttl());
     return $result;
 }
 
