@@ -25,6 +25,7 @@ function cnap_install() {
     add_option('cnap_stopwords', "Subscribe\nFollow us\nJoin us\nSign up\nNewsletter\nDisclaimer\nAdvertisement");
     add_option('cnap_cache_ttl', 300);
     add_option('cnap_log_errors', 0);
+    add_option('cnap_last_published', 0);
     add_option('cnap_stats', array(
         'total_checked' => 0,
         'total_published' => 0,
@@ -210,7 +211,8 @@ function cnap_get_cached_feed_items($source_key, $feed_url) {
     foreach ($items as $item) {
         $data[] = array(
             'title' => $item->get_title(),
-            'link' => $item->get_permalink()
+            'link' => $item->get_permalink(),
+            'date' => $item->get_date('U')
         );
     }
 
@@ -497,6 +499,8 @@ function cnap_get_news() {
     $stopwords = array_filter(array_map('trim', explode("\n", $stopwords_text)));
     $selected_sources = cnap_get_selected_sources();
     $available_sources = cnap_get_available_sources();
+    $last_published = intval(get_option('cnap_last_published', 0));
+    $now = time();
 
     $stats = array(
         'fetched' => 0,
@@ -505,11 +509,10 @@ function cnap_get_news() {
         'total_photos' => 0
     );
 
-    foreach ($selected_sources as $source_key) {
-        if ($stats['published'] >= $count) {
-            break;
-        }
+    $collected = array();
+    $seen_links = array();
 
+    foreach ($selected_sources as $source_key) {
         if (!isset($available_sources[$source_key])) {
             continue;
         }
@@ -519,11 +522,15 @@ function cnap_get_news() {
         $stats['fetched'] += count($items);
 
         foreach ($items as $item) {
-            if ($stats['published'] >= $count) break;
-
             $title = isset($item['title']) ? $item['title'] : '';
             $link = isset($item['link']) ? $item['link'] : '';
+            $date = isset($item['date']) ? intval($item['date']) : 0;
             if (empty($link)) {
+                $stats['skipped']++;
+                continue;
+            }
+
+            if (isset($seen_links[$link])) {
                 $stats['skipped']++;
                 continue;
             }
@@ -541,39 +548,77 @@ function cnap_get_news() {
                 continue;
             }
 
-            $full = cnap_deep_parse_v35($link, $stopwords);
-
-            if (empty($full['content']) || $full['photos_count'] == 0) {
-                cnap_log_error('parsed content empty', array(
-                    'link' => $link,
-                    'title' => $title,
-                    'photos_count' => $full['photos_count']
-                ));
-                $stats['skipped']++;
-                continue;
+            if ($last_published > 0) {
+                if ($date <= 0 || $date <= $last_published) {
+                    $stats['skipped']++;
+                    continue;
+                }
             }
 
-            $post_content = '<div class="cnap-post-content">' . $full['content'] . '</div>';
+            if ($date <= 0) {
+                $date = $now;
+            }
 
-            $post_id = wp_insert_post(array(
-                'post_title' => $title,
-                'post_content' => $post_content,
-                'post_status' => 'publish',
-                'post_author' => 1
+            $seen_links[$link] = true;
+            $collected[] = array(
+                'title' => $title,
+                'link' => $link,
+                'date' => $date,
+                'source' => $source
+            );
+        }
+    }
+
+    if (!empty($collected)) {
+        usort($collected, function($a, $b) {
+            return $b['date'] <=> $a['date'];
+        });
+    }
+
+    foreach ($collected as $item) {
+        if ($stats['published'] >= $count) {
+            break;
+        }
+
+        $full = cnap_deep_parse_v35($item['link'], $stopwords);
+
+        if (empty($full['content']) || $full['photos_count'] == 0) {
+            cnap_log_error('parsed content empty', array(
+                'link' => $item['link'],
+                'title' => $item['title'],
+                'photos_count' => $full['photos_count']
             ));
+            $stats['skipped']++;
+            continue;
+        }
 
-            if ($post_id) {
-                update_post_meta($post_id, 'cnap_post', 1);
-                update_post_meta($post_id, 'cnap_link', $link);
-                update_post_meta($post_id, 'cnap_source', $source['name']);
-                update_post_meta($post_id, 'cnap_photos_count', $full['photos_count']);
+        $post_content = '<div class="cnap-post-content">' . $full['content'] . '</div>';
 
-                cnap_set_thumb($post_id, $full['featured_image']);
+        $post_id = wp_insert_post(array(
+            'post_title' => $item['title'],
+            'post_content' => $post_content,
+            'post_status' => 'publish',
+            'post_author' => 1
+        ));
 
-                $stats['published']++;
-                $stats['total_photos'] += $full['photos_count'];
+        if ($post_id) {
+            update_post_meta($post_id, 'cnap_post', 1);
+            update_post_meta($post_id, 'cnap_link', $item['link']);
+            update_post_meta($post_id, 'cnap_source', $item['source']['name']);
+            update_post_meta($post_id, 'cnap_photos_count', $full['photos_count']);
+
+            cnap_set_thumb($post_id, $full['featured_image']);
+
+            $stats['published']++;
+            $stats['total_photos'] += $full['photos_count'];
+            if ($item['date'] > $last_published) {
+                $last_published = $item['date'];
             }
         }
+    }
+
+    if ($last_published > intval(get_option('cnap_last_published', 0))) {
+        update_option('cnap_last_published', $last_published);
     }
 
     $global_stats = get_option('cnap_stats', array());
