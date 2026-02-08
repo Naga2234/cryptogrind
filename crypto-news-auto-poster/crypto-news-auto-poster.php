@@ -755,7 +755,6 @@ function cnap_deep_parse_v35($url, $stopwords) {
 
     if (empty($all_images)) {
         cnap_log_error('no images found', array('url' => $url));
-        return $result;
     }
 
     foreach ($image_nodes as $img) {
@@ -764,8 +763,10 @@ function cnap_deep_parse_v35($url, $stopwords) {
         }
     }
 
-    $result['featured_image'] = $all_images[0]['src'];
-    $result['photos_count'] = count($all_images);
+    if (!empty($all_images)) {
+        $result['featured_image'] = $all_images[0]['src'];
+        $result['photos_count'] = count($all_images);
+    }
 
     $text_content = $content_node->textContent;
 
@@ -906,6 +907,16 @@ function cnap_deep_parse_v35($url, $stopwords) {
         $result['featured_image'] = $all_images[0]['src'];
     }
 
+    if (empty($result['featured_image'])) {
+        $fallback_image = cnap_get_fallback_image_url();
+        if (!empty($fallback_image)) {
+            $result['featured_image'] = $fallback_image;
+            if ($result['photos_count'] < 1) {
+                $result['photos_count'] = 1;
+            }
+        }
+    }
+
     set_transient($cache_key, $result, cnap_get_cache_ttl());
     return $result;
 }
@@ -937,6 +948,103 @@ function cnap_emphasize_first_paragraph($content_html) {
     return $updated_html;
 }
 
+function cnap_get_target_image_size() {
+    $width = intval(get_option('large_size_w'));
+    $height = intval(get_option('large_size_h'));
+
+    if ($width <= 0 || $height <= 0) {
+        $width = intval(get_option('thumbnail_size_w'));
+        $height = intval(get_option('thumbnail_size_h'));
+    }
+
+    if ($width <= 0 || $height <= 0) {
+        return array();
+    }
+
+    return array(
+        'width' => $width,
+        'height' => $height
+    );
+}
+
+function cnap_get_fallback_image_topics() {
+    return array(
+        'bitcoin',
+        'crypto',
+        'altcoin',
+        'ethereum',
+        'blockchain',
+        'defi',
+        'nft',
+        'trading',
+        'mining',
+        'web3'
+    );
+}
+
+function cnap_get_used_fallback_images() {
+    $used = get_option('cnap_used_fallback_images', array());
+    if (!is_array($used)) {
+        $used = array();
+    }
+    return $used;
+}
+
+function cnap_store_used_fallback_image($url) {
+    if (empty($url)) {
+        return;
+    }
+
+    $used = cnap_get_used_fallback_images();
+    if (!in_array($url, $used, true)) {
+        $used[] = $url;
+    }
+
+    if (count($used) > 100) {
+        $used = array_slice($used, -100);
+    }
+
+    update_option('cnap_used_fallback_images', $used);
+}
+
+function cnap_get_fallback_image_url() {
+    $size = cnap_get_target_image_size();
+    if (empty($size)) {
+        return '';
+    }
+
+    $topics = cnap_get_fallback_image_topics();
+    $used = cnap_get_used_fallback_images();
+    $max_attempts = 6;
+
+    for ($attempt = 0; $attempt < $max_attempts; $attempt++) {
+        $tag_count = min(3, count($topics));
+        $keys = (array) array_rand($topics, $tag_count);
+        $selected = array();
+        foreach ($keys as $key) {
+            $selected[] = $topics[$key];
+        }
+
+        $query = implode(',', array_map('rawurlencode', $selected));
+        $sig = wp_rand(1000, 999999);
+
+        $url = sprintf(
+            'https://source.unsplash.com/%dx%d/?%s&sig=%d',
+            $size['width'],
+            $size['height'],
+            $query,
+            $sig
+        );
+
+        if (!in_array($url, $used, true)) {
+            cnap_store_used_fallback_image($url);
+            return $url;
+        }
+    }
+
+    return '';
+}
+
 function cnap_set_thumb($post_id, $url) {
     if (empty($url)) {
         return;
@@ -949,7 +1057,27 @@ function cnap_set_thumb($post_id, $url) {
     $tmp = download_url($url, 20);
     if (is_wp_error($tmp)) return;
 
-    $file = array('name' => basename($url), 'tmp_name' => $tmp);
+    $size = cnap_get_target_image_size();
+    if (!empty($size)) {
+        $editor = wp_get_image_editor($tmp);
+        if (!is_wp_error($editor)) {
+            $resized = $editor->resize($size['width'], $size['height'], true);
+            if (!is_wp_error($resized)) {
+                $editor->save($tmp);
+            }
+        }
+    }
+
+    $parsed_url = wp_parse_url($url);
+    $filename = '';
+    if (!empty($parsed_url['path'])) {
+        $filename = basename($parsed_url['path']);
+    }
+    if (empty($filename) || $filename === '/') {
+        $filename = 'cnap-image-' . time() . '.jpg';
+    }
+
+    $file = array('name' => $filename, 'tmp_name' => $tmp);
     $id = media_handle_sideload($file, $post_id);
 
     if (!is_wp_error($id)) {
