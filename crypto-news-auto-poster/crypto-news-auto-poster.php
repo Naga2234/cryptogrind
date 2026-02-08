@@ -768,39 +768,72 @@ function cnap_deep_parse_v35($url, $stopwords) {
     $content_html = preg_replace('/[ \t]+/', ' ', $content_html);
     $content_html = preg_replace('/<p>\s+/', '<p>', $content_html);
     $content_html = preg_replace('/\s+<\/p>/', '</p>', $content_html);
-    $content_html = strip_tags($content_html, '<p><br><strong><b><em><i><h2><h3><h4><blockquote><img><figure><figcaption>');
+    $allowed_tags = wp_kses_allowed_html('post');
+    $allowed_tags['figure'] = array(
+        'class' => true,
+    );
+    $allowed_tags['figcaption'] = array(
+        'class' => true,
+    );
+    $allowed_tags['img'] = array_merge($allowed_tags['img'] ?? array(), array(
+        'src' => true,
+        'alt' => true,
+        'class' => true,
+        'title' => true,
+        'loading' => true,
+        'srcset' => true,
+        'sizes' => true,
+    ));
+    $content_html = wp_kses($content_html, $allowed_tags);
 
     if (count($all_images) > 0) {
         $paragraphs = preg_split('/(<\/p>)/', $content_html, -1, PREG_SPLIT_DELIM_CAPTURE);
         $para_count = count($paragraphs);
+        $paragraph_count = preg_match_all('/<p\b[^>]*>.*?<\/p>/is', $content_html);
+        $min_paragraphs_for_spread = 3;
 
         $max_photos = min(count($all_images), 5);
         $inserted = 0;
 
-        for ($i = 0; $i < $max_photos; $i++) {
-            $img_data = $all_images[$i];
+        if ($paragraph_count >= $min_paragraphs_for_spread && $para_count > 2) {
+            for ($i = 0; $i < $max_photos; $i++) {
+                $img_data = $all_images[$i];
 
-            if ($i == 0) {
-                $insert_pos = 2;
-            } else {
-                $interval = intval($para_count / ($max_photos + 1));
-                $insert_pos = min($interval * ($i + 1), $para_count - 1);
+                if ($i == 0) {
+                    $insert_pos = 2;
+                } else {
+                    $interval = intval($para_count / ($max_photos + 1));
+                    $insert_pos = min($interval * ($i + 1), $para_count - 1);
+                }
+
+                $img_html = '<figure class="cnap-figure"><img src="' . esc_url($img_data['src']) . '" alt="Crypto News">';
+
+                if (!empty($img_data['caption'])) {
+                    $img_html .= '<figcaption><strong>' . esc_html($img_data['caption']) . '</strong></figcaption>';
+                }
+                $img_html .= '</figure>';
+
+                if (isset($paragraphs[$insert_pos])) {
+                    $paragraphs[$insert_pos] .= $img_html;
+                    $inserted++;
+                }
             }
 
-            $img_html = '<figure class="cnap-figure"><img src="' . esc_url($img_data['src']) . '" alt="Crypto News">';
+            $content_html = implode('', $paragraphs);
+        } else {
+            for ($i = 0; $i < $max_photos; $i++) {
+                $img_data = $all_images[$i];
+                $img_html = '<figure class="cnap-figure"><img src="' . esc_url($img_data['src']) . '" alt="Crypto News">';
 
-            if (!empty($img_data['caption'])) {
-                $img_html .= '<figcaption><strong>' . esc_html($img_data['caption']) . '</strong></figcaption>';
-            }
-            $img_html .= '</figure>';
+                if (!empty($img_data['caption'])) {
+                    $img_html .= '<figcaption><strong>' . esc_html($img_data['caption']) . '</strong></figcaption>';
+                }
+                $img_html .= '</figure>';
 
-            if (isset($paragraphs[$insert_pos])) {
-                $paragraphs[$insert_pos] .= $img_html;
+                $content_html .= $img_html;
                 $inserted++;
             }
         }
-
-        $content_html = implode('', $paragraphs);
     }
 
     $result['content'] = trim($content_html);
