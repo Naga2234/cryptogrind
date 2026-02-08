@@ -114,11 +114,50 @@ function cnap_post_styles() {
     }
 }
 
+function cnap_get_available_sources() {
+    return array(
+        'cryptonewsz' => array(
+            'name' => 'CryptoNewsZ',
+            'feed' => 'https://www.cryptonewsz.com/feed/'
+        ),
+        'coindesk' => array(
+            'name' => 'CoinDesk',
+            'feed' => 'https://www.coindesk.com/arc/outboundfeeds/rss/'
+        ),
+        'cointelegraph' => array(
+            'name' => 'Cointelegraph',
+            'feed' => 'https://cointelegraph.com/rss'
+        ),
+        'u-today' => array(
+            'name' => 'U.Today',
+            'feed' => 'https://u.today/rss'
+        )
+    );
+}
+
+function cnap_get_selected_sources() {
+    $selected = get_option('cnap_sources', array('cryptonewsz'));
+    if (!is_array($selected)) {
+        $selected = array($selected);
+    }
+
+    $available = cnap_get_available_sources();
+    $valid = array_values(array_intersect($selected, array_keys($available)));
+
+    if (empty($valid)) {
+        $valid = array('cryptonewsz');
+    }
+
+    return $valid;
+}
+
 function cnap_page() {
     $enabled = get_option('cnap_enabled', 0);
     $count = get_option('cnap_count', 3);
     $interval = get_option('cnap_interval', 'five_minutes');
     $stopwords = get_option('cnap_stopwords', '');
+    $selected_sources = cnap_get_selected_sources();
+    $available_sources = cnap_get_available_sources();
 
     $stats = get_option('cnap_stats', array(
         'total_checked' => 0,
@@ -206,6 +245,15 @@ function cnap_page() {
                     </select>
                     <label><strong>Постов:</strong></label><br>
                     <input type="number" name="count" value="<?php echo $count; ?>" min="1" max="20" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;margin:5px 0 15px 0;">
+                    <label><strong>Источники:</strong></label><br>
+                    <div style="margin:8px 0 15px 0;padding:10px;border:1px solid #ddd;border-radius:6px;max-height:160px;overflow:auto;">
+                        <?php foreach ($available_sources as $key => $source): ?>
+                            <label style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+                                <input type="checkbox" name="sources[]" value="<?php echo esc_attr($key); ?>" <?php checked(in_array($key, $selected_sources, true)); ?>>
+                                <span><?php echo esc_html($source['name']); ?></span>
+                            </label>
+                        <?php endforeach; ?>
+                    </div>
                     <input type="hidden" name="cnap_save_settings" value="1">
                     <button type="submit" class="button button-primary" style="width:100%;">💾 Сохранить</button>
                 </form>
@@ -297,6 +345,19 @@ function cnap_page() {
         check_admin_referer('cnap_save_settings', 'cnap_settings_nonce');
         update_option('cnap_count', intval($_POST['count']));
         $new_interval = sanitize_text_field($_POST['interval']);
+        $available_sources = cnap_get_available_sources();
+        $sources_input = isset($_POST['sources']) ? (array) $_POST['sources'] : array();
+        $sources_sanitized = array();
+        foreach ($sources_input as $source_key) {
+            $source_key = sanitize_text_field($source_key);
+            if (isset($available_sources[$source_key])) {
+                $sources_sanitized[] = $source_key;
+            }
+        }
+        if (empty($sources_sanitized)) {
+            $sources_sanitized = array('cryptonewsz');
+        }
+        update_option('cnap_sources', array_values(array_unique($sources_sanitized)));
         update_option('cnap_interval', $new_interval);
         if (get_option('cnap_enabled', 0)) {
             wp_clear_scheduled_hook('cnap_cron');
@@ -373,66 +434,80 @@ function cnap_get_news() {
     $count = get_option('cnap_count', 3);
     $stopwords_text = get_option('cnap_stopwords', '');
     $stopwords = array_filter(array_map('trim', explode("\n", $stopwords_text)));
-
-    $rss = fetch_feed('https://www.cryptonewsz.com/feed/');
-    if (is_wp_error($rss)) {
-        return array('fetched' => 0, 'published' => 0, 'skipped' => 0, 'total_photos' => 0);
-    }
-
-    $items = $rss->get_items(0, 20);
+    $selected_sources = cnap_get_selected_sources();
+    $available_sources = cnap_get_available_sources();
 
     $stats = array(
-        'fetched' => count($items),
+        'fetched' => 0,
         'published' => 0,
         'skipped' => 0,
         'total_photos' => 0
     );
 
-    foreach ($items as $item) {
-        if ($stats['published'] >= $count) break;
+    foreach ($selected_sources as $source_key) {
+        if ($stats['published'] >= $count) {
+            break;
+        }
 
-        $title = $item->get_title();
-        $link = $item->get_permalink();
-
-        $exists = get_posts(array(
-            'post_type' => 'post',
-            'meta_key' => 'cnap_link',
-            'meta_value' => $link,
-            'posts_per_page' => 1,
-            'fields' => 'ids'
-        ));
-
-        if (!empty($exists)) {
-            $stats['skipped']++;
+        if (!isset($available_sources[$source_key])) {
             continue;
         }
 
-        $full = cnap_deep_parse_v35($link, $stopwords);
-
-        if (empty($full['content']) || empty($full['featured_image']) || $full['photos_count'] == 0) {
-            $stats['skipped']++;
+        $source = $available_sources[$source_key];
+        $rss = fetch_feed($source['feed']);
+        if (is_wp_error($rss)) {
             continue;
         }
 
-        $post_content = '<div class="cnap-post-content">' . $full['content'] . '</div>';
+        $items = $rss->get_items(0, 20);
+        $stats['fetched'] += count($items);
 
-        $post_id = wp_insert_post(array(
-            'post_title' => $title,
-            'post_content' => $post_content,
-            'post_status' => 'publish',
-            'post_author' => 1
-        ));
+        foreach ($items as $item) {
+            if ($stats['published'] >= $count) break;
 
-        if ($post_id) {
-            update_post_meta($post_id, 'cnap_post', 1);
-            update_post_meta($post_id, 'cnap_link', $link);
-            update_post_meta($post_id, 'cnap_source', 'CryptoNewsZ');
-            update_post_meta($post_id, 'cnap_photos_count', $full['photos_count']);
+            $title = $item->get_title();
+            $link = $item->get_permalink();
 
-            cnap_set_thumb($post_id, $full['featured_image']);
+            $exists = get_posts(array(
+                'post_type' => 'post',
+                'meta_key' => 'cnap_link',
+                'meta_value' => $link,
+                'posts_per_page' => 1,
+                'fields' => 'ids'
+            ));
 
-            $stats['published']++;
-            $stats['total_photos'] += $full['photos_count'];
+            if (!empty($exists)) {
+                $stats['skipped']++;
+                continue;
+            }
+
+            $full = cnap_deep_parse_v35($link, $stopwords);
+
+            if (empty($full['content']) || empty($full['featured_image']) || $full['photos_count'] == 0) {
+                $stats['skipped']++;
+                continue;
+            }
+
+            $post_content = '<div class="cnap-post-content">' . $full['content'] . '</div>';
+
+            $post_id = wp_insert_post(array(
+                'post_title' => $title,
+                'post_content' => $post_content,
+                'post_status' => 'publish',
+                'post_author' => 1
+            ));
+
+            if ($post_id) {
+                update_post_meta($post_id, 'cnap_post', 1);
+                update_post_meta($post_id, 'cnap_link', $link);
+                update_post_meta($post_id, 'cnap_source', $source['name']);
+                update_post_meta($post_id, 'cnap_photos_count', $full['photos_count']);
+
+                cnap_set_thumb($post_id, $full['featured_image']);
+
+                $stats['published']++;
+                $stats['total_photos'] += $full['photos_count'];
+            }
         }
     }
 
