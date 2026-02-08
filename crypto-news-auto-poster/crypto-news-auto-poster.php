@@ -42,13 +42,17 @@ function cnap_maybe_schedule_cron() {
     $interval = get_option('cnap_interval', 'five_minutes');
 
     $current_schedule = wp_get_schedule('cnap_cron');
+    $next_scheduled = wp_next_scheduled('cnap_cron');
 
     if ($enabled) {
         if ($current_schedule !== $interval) {
             wp_clear_scheduled_hook('cnap_cron');
+            $next_scheduled = wp_next_scheduled('cnap_cron');
+        }
+        if (!$next_scheduled) {
             wp_schedule_event(time() + 60, $interval, 'cnap_cron');
         }
-    } elseif ($current_schedule) {
+    } elseif ($next_scheduled) {
         wp_clear_scheduled_hook('cnap_cron');
     }
 }
