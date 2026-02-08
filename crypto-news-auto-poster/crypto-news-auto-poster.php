@@ -193,6 +193,7 @@ function cnap_page() {
                 <p><strong>Время:</strong><br><?php echo $uptime_display; ?></p>
                 <?php endif; ?>
                 <form method="post" style="margin-top:20px;">
+                    <?php wp_nonce_field('cnap_save_settings', 'cnap_settings_nonce'); ?>
                     <label><strong>Интервал:</strong></label><br>
                     <select name="interval" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;margin:5px 0 15px 0;">
                         <option value="five_minutes" <?php selected($interval, 'five_minutes'); ?>>5 минут</option>
@@ -217,6 +218,7 @@ function cnap_page() {
             <div style="background:white;padding:25px;border:1px solid #e5e7eb;border-radius:12px;box-shadow:0 2px 4px rgba(0,0,0,0.05);">
                 <h2 style="margin-top:0;">🚫 Стоп-слова</h2>
                 <form method="post" action="">
+                    <?php wp_nonce_field('cnap_save_stopwords', 'cnap_stopwords_nonce'); ?>
                     <textarea name="stopwords" rows="10" style="width:100%;padding:10px;border:1px solid #ddd;border-radius:6px;font-family:monospace;font-size:14px;"><?php echo esc_textarea($stopwords); ?></textarea>
                     <input type="hidden" name="cnap_save_stopwords" value="1">
                     <button type="submit" class="button button-primary" style="width:100%;margin-top:10px;">💾 Сохранить</button>
@@ -266,8 +268,9 @@ function cnap_page() {
     <style>@keyframes spin { to { transform: rotate(360deg); }}</style>
 
     <script>
+    const cnapNonce = '<?php echo esc_js(wp_create_nonce('cnap_ajax')); ?>';
     function cnap_toggle() {
-        jQuery.post(ajaxurl, {action: 'cnap_toggle'}, function(r) {
+        jQuery.post(ajaxurl, {action: 'cnap_toggle', nonce: cnapNonce}, function(r) {
             alert(r.data);
             location.reload();
         });
@@ -277,7 +280,7 @@ function cnap_page() {
         jQuery('#cnap-loading').css('display', 'flex');
         jQuery('#cnap-result').hide();
 
-        jQuery.post(ajaxurl, {action: 'cnap_fetch'}, function(r) {
+        jQuery.post(ajaxurl, {action: 'cnap_fetch', nonce: cnapNonce}, function(r) {
             jQuery('#cnap-loading').hide();
             jQuery('#cnap-result').html(r.data).slideDown();
             setTimeout(function() { location.reload(); }, 3000);
@@ -287,6 +290,7 @@ function cnap_page() {
     <?php
 
     if (isset($_POST['cnap_save_settings'])) {
+        check_admin_referer('cnap_save_settings', 'cnap_settings_nonce');
         update_option('cnap_count', intval($_POST['count']));
         $new_interval = sanitize_text_field($_POST['interval']);
         update_option('cnap_interval', $new_interval);
@@ -298,6 +302,7 @@ function cnap_page() {
     }
 
     if (isset($_POST['cnap_save_stopwords'])) {
+        check_admin_referer('cnap_save_stopwords', 'cnap_stopwords_nonce');
         update_option('cnap_stopwords', sanitize_textarea_field($_POST['stopwords']));
         echo '<div style="background:#d1fae5;border:2px solid #10b981;padding:15px;margin:20px 0;border-radius:8px;color:#065f46;"><strong>✅ Сохранено!</strong></div>';
     }
@@ -305,6 +310,11 @@ function cnap_page() {
 
 add_action('wp_ajax_cnap_toggle', 'cnap_ajax_toggle');
 function cnap_ajax_toggle() {
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error('Недостаточно прав');
+    }
+    check_ajax_referer('cnap_ajax', 'nonce');
+
     $enabled = get_option('cnap_enabled', 0);
     $stats = get_option('cnap_stats', array());
     $interval = get_option('cnap_interval', 'five_minutes');
@@ -330,6 +340,11 @@ function cnap_ajax_toggle() {
 
 add_action('wp_ajax_cnap_fetch', 'cnap_ajax_fetch');
 function cnap_ajax_fetch() {
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error('Недостаточно прав');
+    }
+    check_ajax_referer('cnap_ajax', 'nonce');
+
     $result = cnap_get_news();
 
     $msg = '<strong>📊 РЕЗУЛЬТАТ:</strong><br><br>';
