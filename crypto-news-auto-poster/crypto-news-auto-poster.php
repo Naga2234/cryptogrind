@@ -3,9 +3,18 @@
  * Plugin Name: Crypto News Auto Poster
  * Version: 3.5.0
  * Description: Clean Edition - без тегов и хэштегов
+ * Text Domain: crypto-news-auto-poster
+ * Domain Path: /languages
  */
 
 if (!defined('ABSPATH')) exit;
+
+define('CNAP_VERSION', '3.5.0');
+
+add_action('init', 'cnap_load_textdomain');
+function cnap_load_textdomain() {
+    load_plugin_textdomain('crypto-news-auto-poster', false, dirname(plugin_basename(__FILE__)) . '/languages');
+}
 
 register_activation_hook(__FILE__, 'cnap_install');
 function cnap_install() {
@@ -28,8 +37,8 @@ function cnap_install() {
 
 add_filter('cron_schedules', 'cnap_cron_schedules');
 function cnap_cron_schedules($schedules) {
-    $schedules['five_minutes'] = array('interval' => 300, 'display' => 'Каждые 5 минут');
-    $schedules['ten_minutes'] = array('interval' => 600, 'display' => 'Каждые 10 минут');
+    $schedules['five_minutes'] = array('interval' => 300, 'display' => __('Каждые 5 минут', 'crypto-news-auto-poster'));
+    $schedules['ten_minutes'] = array('interval' => 600, 'display' => __('Каждые 10 минут', 'crypto-news-auto-poster'));
     return $schedules;
 }
 
@@ -61,59 +70,58 @@ function cnap_maybe_schedule_cron() {
 
 add_action('admin_menu', 'cnap_menu');
 function cnap_menu() {
-    add_menu_page('Crypto News', 'Crypto News', 'manage_options', 'crypto-news', 'cnap_page', 'dashicons-rss');
+    global $cnap_admin_hook;
+    $cnap_admin_hook = add_menu_page(
+        __('Crypto News', 'crypto-news-auto-poster'),
+        __('Crypto News', 'crypto-news-auto-poster'),
+        'manage_options',
+        'crypto-news',
+        'cnap_page',
+        'dashicons-rss'
+    );
 }
 
-add_action('wp_head', 'cnap_post_styles');
-function cnap_post_styles() {
+add_action('wp_enqueue_scripts', 'cnap_front_assets');
+function cnap_front_assets() {
     if (is_single()) {
-        echo '<style>
-        .cnap-post-content {
-            max-width: 800px;
-            margin: 0 auto;
-            font-size: 18px;
-            line-height: 1.8;
-            color: #333;
-        }
-        .cnap-post-content p {
-            margin: 1.2em 0;
-            text-align: justify;
-        }
-        .cnap-post-content img {
-            max-width: 100%;
-            width: 100%;
-            height: auto;
-            object-fit: cover;
-            max-height: 500px;
-            border-radius: 8px;
-            margin: 1em 0;
-            display: block;
-        }
-        .cnap-post-content figure {
-            margin: 1em 0;
-        }
-        .cnap-post-content figcaption,
-        .cnap-post-content .img-caption {
-            font-weight: 700;
-            font-size: 16px;
-            color: #555;
-            margin: 0.5em 0 1em 0;
-            text-align: center;
-            font-style: italic;
-        }
-        .cnap-post-content h2, .cnap-post-content h3 {
-            margin: 1.8em 0 0.8em;
-            font-weight: 700;
-        }
-        .cnap-post-content blockquote {
-            border-left: 4px solid #2563EB;
-            padding-left: 1.5em;
-            margin: 1.5em 0;
-            font-style: italic;
-            color: #555;
-        }
-        </style>';
+        wp_enqueue_style(
+            'cnap-post',
+            plugin_dir_url(__FILE__) . 'css/front.css',
+            array(),
+            CNAP_VERSION
+        );
     }
+}
+
+add_action('admin_enqueue_scripts', 'cnap_admin_assets');
+function cnap_admin_assets($hook_suffix) {
+    global $cnap_admin_hook;
+    if (!isset($cnap_admin_hook) || $hook_suffix !== $cnap_admin_hook) {
+        return;
+    }
+
+    wp_enqueue_style(
+        'cnap-admin',
+        plugin_dir_url(__FILE__) . 'css/admin.css',
+        array(),
+        CNAP_VERSION
+    );
+
+    wp_enqueue_script(
+        'cnap-admin',
+        plugin_dir_url(__FILE__) . 'js/admin.js',
+        array('jquery'),
+        CNAP_VERSION,
+        true
+    );
+
+    wp_localize_script('cnap-admin', 'cnapAdmin', array(
+        'ajaxUrl' => admin_url('admin-ajax.php'),
+        'nonce' => wp_create_nonce('cnap_ajax'),
+        'messages' => array(
+            'toggleError' => __('Не удалось выполнить действие. Попробуйте позже.', 'crypto-news-auto-poster')
+        )
+    ));
 }
 
 function cnap_get_available_sources() {
@@ -239,165 +247,159 @@ function cnap_page() {
 
     $uptime_hours = floor($uptime_seconds / 3600);
     $uptime_minutes = floor(($uptime_seconds % 3600) / 60);
-    $uptime_display = sprintf('%dч %dмин', $uptime_hours, $uptime_minutes);
+    /* translators: 1: hours, 2: minutes */
+    $uptime_display = sprintf(__('%1$dч %2$dмин', 'crypto-news-auto-poster'), $uptime_hours, $uptime_minutes);
 
     ?>
-    <div style="max-width:1200px;margin:20px;">
-        <div style="background:linear-gradient(135deg,#10b981,#059669);color:white;padding:40px;border-radius:12px;margin-bottom:20px;box-shadow:0 4px 6px rgba(0,0,0,0.1);">
-            <h1 style="margin:0;font-size:32px;">🚀 Crypto News Auto Poster v3.5.0</h1>
-            <p style="margin:10px 0 0 0;opacity:0.95;font-size:16px;">Clean Edition - без тегов и хэштегов</p>
+    <div class="cnap-admin-wrap">
+        <div class="cnap-hero">
+            <h1 class="cnap-hero__title"><?php echo esc_html(sprintf(__('🚀 Crypto News Auto Poster v%s', 'crypto-news-auto-poster'), CNAP_VERSION)); ?></h1>
+            <p class="cnap-hero__subtitle"><?php esc_html_e('Clean Edition - без тегов и хэштегов', 'crypto-news-auto-poster'); ?></p>
         </div>
 
         <?php if ($enabled): ?>
-        <div style="background:#dcfce7;padding:20px;border-radius:12px;margin-bottom:20px;border-left:4px solid #10b981;">
-            <div style="display:flex;align-items:center;justify-content:space-between;">
+        <div class="cnap-status">
+            <div class="cnap-status__row">
                 <div>
-                    <h3 style="margin:0 0 5px 0;color:#065f46;">⏱️ АВТОПОСТИНГ РАБОТАЕТ</h3>
-                    <p style="margin:0;color:#166534;">Время работы: <strong><?php echo $uptime_display; ?></strong></p>
+                    <h3 class="cnap-status__title"><?php esc_html_e('⏱️ АВТОПОСТИНГ РАБОТАЕТ', 'crypto-news-auto-poster'); ?></h3>
+                    <p class="cnap-status__text">
+                        <?php
+                        printf(
+                            esc_html__('Время работы: %s', 'crypto-news-auto-poster'),
+                            '<strong>' . esc_html($uptime_display) . '</strong>'
+                        );
+                        ?>
+                    </p>
                 </div>
-                <div style="font-size:48px;">🟢</div>
+                <div class="cnap-status__icon">🟢</div>
             </div>
         </div>
         <?php endif; ?>
 
-        <div style="background:#e0e7ff;padding:20px;border-radius:12px;margin-bottom:20px;border-left:4px solid #6366f1;">
-            <h3 style="margin:0 0 10px 0;color:#3730a3;">🆕 Новое в v3.5.0 CLEAN</h3>
-            <p style="margin:0;color:#3730a3;line-height:1.6;">
-                ✅ ПОЛНОСТЬЮ УДАЛЕНЫ теги<br>
-                ✅ ПОЛНОСТЬЮ УДАЛЕНЫ хэштеги<br>
-                ✅ Чистые посты без меток<br>
-                ✅ Идеальное форматирование<br>
-                ✅ Без "Также читайте"<br>
-                ✅ Без дублей фото
+        <div class="cnap-highlight">
+            <h3 class="cnap-highlight__title"><?php esc_html_e('🆕 Новое в v3.5.0 CLEAN', 'crypto-news-auto-poster'); ?></h3>
+            <p class="cnap-highlight__text">
+                <?php esc_html_e('✅ ПОЛНОСТЬЮ УДАЛЕНЫ теги', 'crypto-news-auto-poster'); ?><br>
+                <?php esc_html_e('✅ ПОЛНОСТЬЮ УДАЛЕНЫ хэштеги', 'crypto-news-auto-poster'); ?><br>
+                <?php esc_html_e('✅ Чистые посты без меток', 'crypto-news-auto-poster'); ?><br>
+                <?php esc_html_e('✅ Идеальное форматирование', 'crypto-news-auto-poster'); ?><br>
+                <?php esc_html_e('✅ Без "Также читайте"', 'crypto-news-auto-poster'); ?><br>
+                <?php esc_html_e('✅ Без дублей фото', 'crypto-news-auto-poster'); ?>
             </p>
         </div>
 
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:20px;margin-bottom:20px;">
-            <div style="background:white;padding:20px;border:1px solid #e5e7eb;border-radius:12px;box-shadow:0 2px 4px rgba(0,0,0,0.05);">
-                <h3 style="margin:0 0 15px 0;font-size:14px;color:#6b7280;text-transform:uppercase;">📊 Проверено</h3>
-                <p style="margin:0;font-size:36px;font-weight:bold;color:#10b981;"><?php echo number_format($stats['total_checked']); ?></p>
+        <div class="cnap-stats">
+            <div class="cnap-card">
+                <h3 class="cnap-card__label"><?php esc_html_e('📊 Проверено', 'crypto-news-auto-poster'); ?></h3>
+                <p class="cnap-card__value cnap-card__value--positive"><?php echo esc_html(number_format($stats['total_checked'])); ?></p>
             </div>
-            <div style="background:white;padding:20px;border:1px solid #e5e7eb;border-radius:12px;box-shadow:0 2px 4px rgba(0,0,0,0.05);">
-                <h3 style="margin:0 0 15px 0;font-size:14px;color:#6b7280;text-transform:uppercase;">✅ Опубликовано</h3>
-                <p style="margin:0;font-size:36px;font-weight:bold;color:#10b981;"><?php echo number_format($stats['total_published']); ?></p>
+            <div class="cnap-card">
+                <h3 class="cnap-card__label"><?php esc_html_e('✅ Опубликовано', 'crypto-news-auto-poster'); ?></h3>
+                <p class="cnap-card__value cnap-card__value--positive"><?php echo esc_html(number_format($stats['total_published'])); ?></p>
             </div>
-            <div style="background:white;padding:20px;border:1px solid #e5e7eb;border-radius:12px;box-shadow:0 2px 4px rgba(0,0,0,0.05);">
-                <h3 style="margin:0 0 15px 0;font-size:14px;color:#6b7280;text-transform:uppercase;">🚫 Отфильтровано</h3>
-                <p style="margin:0;font-size:36px;font-weight:bold;color:#ef4444;"><?php echo number_format($stats['total_filtered']); ?></p>
+            <div class="cnap-card">
+                <h3 class="cnap-card__label"><?php esc_html_e('🚫 Отфильтровано', 'crypto-news-auto-poster'); ?></h3>
+                <p class="cnap-card__value cnap-card__value--negative"><?php echo esc_html(number_format($stats['total_filtered'])); ?></p>
             </div>
         </div>
 
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px;">
-            <div style="background:white;padding:25px;border:1px solid #e5e7eb;border-radius:12px;box-shadow:0 2px 4px rgba(0,0,0,0.05);">
-                <h2 style="margin-top:0;">⚙️ Автопостинг</h2>
-                <p><strong>Статус:</strong> <span style="font-size:20px;"><?php echo $enabled ? '🟢' : '🔴'; ?></span> <?php echo $enabled ? 'Включен' : 'Выключен'; ?></p>
+        <div class="cnap-settings">
+            <div class="cnap-card cnap-card--section">
+                <h2 class="cnap-card__title"><?php esc_html_e('⚙️ Автопостинг', 'crypto-news-auto-poster'); ?></h2>
+                <p class="cnap-card__text">
+                    <strong><?php esc_html_e('Статус:', 'crypto-news-auto-poster'); ?></strong>
+                    <span class="cnap-status-indicator"><?php echo $enabled ? '🟢' : '🔴'; ?></span>
+                    <?php echo esc_html($enabled ? __('Включен', 'crypto-news-auto-poster') : __('Выключен', 'crypto-news-auto-poster')); ?>
+                </p>
                 <?php if ($enabled): ?>
-                <p><strong>Время:</strong><br><?php echo $uptime_display; ?></p>
+                <p class="cnap-card__text">
+                    <strong><?php esc_html_e('Время:', 'crypto-news-auto-poster'); ?></strong><br>
+                    <?php echo esc_html($uptime_display); ?>
+                </p>
                 <?php endif; ?>
-                <form method="post" style="margin-top:20px;">
+                <form method="post" class="cnap-form">
                     <?php wp_nonce_field('cnap_save_settings', 'cnap_settings_nonce'); ?>
-                    <label><strong>Интервал:</strong></label><br>
-                    <select name="interval" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;margin:5px 0 15px 0;">
-                        <option value="five_minutes" <?php selected($interval, 'five_minutes'); ?>>5 минут</option>
-                        <option value="ten_minutes" <?php selected($interval, 'ten_minutes'); ?>>10 минут</option>
-                        <option value="hourly" <?php selected($interval, 'hourly'); ?>>1 час</option>
+                    <label class="cnap-form__label"><strong><?php esc_html_e('Интервал:', 'crypto-news-auto-poster'); ?></strong></label><br>
+                    <select name="interval" class="cnap-form__field">
+                        <option value="five_minutes" <?php selected($interval, 'five_minutes'); ?>><?php esc_html_e('5 минут', 'crypto-news-auto-poster'); ?></option>
+                        <option value="ten_minutes" <?php selected($interval, 'ten_minutes'); ?>><?php esc_html_e('10 минут', 'crypto-news-auto-poster'); ?></option>
+                        <option value="hourly" <?php selected($interval, 'hourly'); ?>><?php esc_html_e('1 час', 'crypto-news-auto-poster'); ?></option>
                     </select>
-                    <label><strong>Постов:</strong></label><br>
-                    <input type="number" name="count" value="<?php echo $count; ?>" min="1" max="20" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;margin:5px 0 15px 0;">
-                    <label><strong>Источники:</strong></label><br>
-                    <div style="margin:8px 0 15px 0;padding:10px;border:1px solid #ddd;border-radius:6px;max-height:160px;overflow:auto;">
+                    <label class="cnap-form__label"><strong><?php esc_html_e('Постов:', 'crypto-news-auto-poster'); ?></strong></label><br>
+                    <input type="number" name="count" value="<?php echo esc_attr($count); ?>" min="1" max="20" class="cnap-form__field">
+                    <label class="cnap-form__label"><strong><?php esc_html_e('Источники:', 'crypto-news-auto-poster'); ?></strong></label><br>
+                    <div class="cnap-checkboxes">
                         <?php foreach ($available_sources as $key => $source): ?>
-                            <label style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+                            <label class="cnap-checkboxes__label">
                                 <input type="checkbox" name="sources[]" value="<?php echo esc_attr($key); ?>" <?php checked(in_array($key, $selected_sources, true)); ?>>
                                 <span><?php echo esc_html($source['name']); ?></span>
                             </label>
                         <?php endforeach; ?>
                     </div>
                     <input type="hidden" name="cnap_save_settings" value="1">
-                    <button type="submit" class="button button-primary" style="width:100%;">💾 Сохранить</button>
+                    <button type="submit" class="button button-primary cnap-button-full">💾 <?php esc_html_e('Сохранить', 'crypto-news-auto-poster'); ?></button>
                 </form>
-                <div style="border-top:1px solid #e5e7eb;padding-top:15px;margin-top:15px;">
-                    <button onclick="cnap_toggle()" class="button button-primary" style="margin-right:10px;width:48%;">
-                        <?php echo $enabled ? '⏸️ Стоп' : '▶️ Старт'; ?>
+                <div class="cnap-actions">
+                    <button type="button" class="button button-primary cnap-action" data-action="toggle">
+                        <?php echo esc_html($enabled ? __('⏸️ Стоп', 'crypto-news-auto-poster') : __('▶️ Старт', 'crypto-news-auto-poster')); ?>
                     </button>
-                    <button onclick="cnap_fetch()" class="button button-primary" style="width:48%;">
-                        🔄 Вручную
+                    <button type="button" class="button button-primary cnap-action" data-action="fetch">
+                        <?php esc_html_e('🔄 Вручную', 'crypto-news-auto-poster'); ?>
                     </button>
                 </div>
             </div>
 
-            <div style="background:white;padding:25px;border:1px solid #e5e7eb;border-radius:12px;box-shadow:0 2px 4px rgba(0,0,0,0.05);">
-                <h2 style="margin-top:0;">🚫 Стоп-слова</h2>
+            <div class="cnap-card cnap-card--section">
+                <h2 class="cnap-card__title"><?php esc_html_e('🚫 Стоп-слова', 'crypto-news-auto-poster'); ?></h2>
                 <form method="post" action="">
                     <?php wp_nonce_field('cnap_save_stopwords', 'cnap_stopwords_nonce'); ?>
-                    <textarea name="stopwords" rows="10" style="width:100%;padding:10px;border:1px solid #ddd;border-radius:6px;font-family:monospace;font-size:14px;"><?php echo esc_textarea($stopwords); ?></textarea>
+                    <textarea name="stopwords" rows="10" class="cnap-form__textarea"><?php echo esc_textarea($stopwords); ?></textarea>
                     <input type="hidden" name="cnap_save_stopwords" value="1">
-                    <button type="submit" class="button button-primary" style="width:100%;margin-top:10px;">💾 Сохранить</button>
+                    <button type="submit" class="button button-primary cnap-button-full cnap-button-spaced">💾 <?php esc_html_e('Сохранить', 'crypto-news-auto-poster'); ?></button>
                 </form>
             </div>
         </div>
 
-        <div style="background:white;padding:25px;border:1px solid #e5e7eb;border-radius:12px;box-shadow:0 2px 4px rgba(0,0,0,0.05);">
-            <h2 style="margin-top:0;">📰 Последние посты</h2>
+        <div class="cnap-card cnap-card--section">
+            <h2 class="cnap-card__title"><?php esc_html_e('📰 Последние посты', 'crypto-news-auto-poster'); ?></h2>
             <?php
             $posts = get_posts(array('posts_per_page' => 15, 'meta_key' => 'cnap_post'));
             if ($posts) {
-                echo '<div style="display:grid;gap:15px;">';
+                echo '<div class="cnap-posts-grid">';
                 foreach ($posts as $p) {
                     $photos_count = get_post_meta($p->ID, 'cnap_photos_count', true);
 
-                    echo '<div style="padding:15px;background:#f9fafb;border-radius:8px;display:flex;gap:15px;align-items:center;">';
+                    echo '<div class="cnap-post-item">';
                     if (has_post_thumbnail($p->ID)) {
-                        echo '<div style="flex-shrink:0;">' . get_the_post_thumbnail($p->ID, array(80,80), array('style' => 'border-radius:6px;')) . '</div>';
+                        echo '<div class="cnap-post-thumb">' . get_the_post_thumbnail($p->ID, array(80,80), array('class' => 'cnap-thumb')) . '</div>';
                     }
-                    echo '<div style="flex:1;">';
+                    echo '<div class="cnap-post-content">';
                     echo '<strong>' . esc_html($p->post_title) . '</strong><br>';
-                    echo '<small style="color:#6b7280;">';
-                    if ($photos_count) echo '<span style="background:#dbeafe;color:#1e40af;padding:2px 8px;border-radius:10px;font-size:11px;margin-right:8px;">📷 ' . $photos_count . '</span>';
-                    echo get_the_date('d.m.Y H:i', $p->ID);
+                    echo '<small class="cnap-post-meta">';
+                    if ($photos_count) {
+                        echo '<span class="cnap-post-photos">📷 ' . esc_html($photos_count) . '</span>';
+                    }
+                    echo esc_html(get_the_date('d.m.Y H:i', $p->ID));
                     echo '</small>';
                     echo '</div>';
-                    echo '<a href="' . get_edit_post_link($p->ID) . '" class="button button-small">Ред.</a>';
+                    echo '<a href="' . esc_url(get_edit_post_link($p->ID)) . '" class="button button-small">' . esc_html__('Ред.', 'crypto-news-auto-poster') . '</a>';
                     echo '</div>';
                 }
                 echo '</div>';
             } else {
-                echo '<p style="text-align:center;color:#6b7280;padding:40px;">Нет постов</p>';
+                echo '<p class="cnap-posts-empty">' . esc_html__('Нет постов', 'crypto-news-auto-poster') . '</p>';
             }
             ?>
         </div>
 
-        <div id="cnap-result" style="margin-top:20px;padding:20px;background:#dcfce7;border:2px solid #10b981;border-radius:12px;display:none;"></div>
-        <div id="cnap-loading" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.8);z-index:9999;align-items:center;justify-content:center;">
-            <div style="text-align:center;color:white;">
-                <div style="width:60px;height:60px;border:4px solid rgba(255,255,255,0.3);border-top-color:white;border-radius:50%;animation:spin 0.8s linear infinite;margin:0 auto 20px;"></div>
-                <p style="font-size:18px;margin:0;">Загрузка...</p>
+        <div id="cnap-result" class="cnap-result"></div>
+        <div id="cnap-loading" class="cnap-loading">
+            <div class="cnap-loading__content">
+                <div class="cnap-loading__spinner"></div>
+                <p class="cnap-loading__text"><?php esc_html_e('Загрузка...', 'crypto-news-auto-poster'); ?></p>
             </div>
         </div>
     </div>
-
-    <style>@keyframes spin { to { transform: rotate(360deg); }}</style>
-
-    <script>
-    const cnapNonce = '<?php echo esc_js(wp_create_nonce('cnap_ajax')); ?>';
-    function cnap_toggle() {
-        jQuery.post(ajaxurl, {action: 'cnap_toggle', nonce: cnapNonce}, function(r) {
-            alert(r.data);
-            location.reload();
-        });
-    }
-
-    function cnap_fetch() {
-        jQuery('#cnap-loading').css('display', 'flex');
-        jQuery('#cnap-result').hide();
-
-        jQuery.post(ajaxurl, {action: 'cnap_fetch', nonce: cnapNonce}, function(r) {
-            jQuery('#cnap-loading').hide();
-            jQuery('#cnap-result').html(r.data).slideDown();
-            setTimeout(function() { location.reload(); }, 3000);
-        });
-    }
-    </script>
     <?php
 
     if (isset($_POST['cnap_save_settings'])) {
@@ -422,20 +424,20 @@ function cnap_page() {
             wp_clear_scheduled_hook('cnap_cron');
             wp_schedule_event(time() + 60, $new_interval, 'cnap_cron');
         }
-        echo '<div style="background:#d1fae5;border:2px solid #10b981;padding:15px;margin:20px 0;border-radius:8px;color:#065f46;"><strong>✅ Сохранено!</strong></div>';
+        echo '<div class="cnap-notice"><strong>' . esc_html__('✅ Сохранено!', 'crypto-news-auto-poster') . '</strong></div>';
     }
 
     if (isset($_POST['cnap_save_stopwords'])) {
         check_admin_referer('cnap_save_stopwords', 'cnap_stopwords_nonce');
         update_option('cnap_stopwords', sanitize_textarea_field($_POST['stopwords']));
-        echo '<div style="background:#d1fae5;border:2px solid #10b981;padding:15px;margin:20px 0;border-radius:8px;color:#065f46;"><strong>✅ Сохранено!</strong></div>';
+        echo '<div class="cnap-notice"><strong>' . esc_html__('✅ Сохранено!', 'crypto-news-auto-poster') . '</strong></div>';
     }
 }
 
 add_action('wp_ajax_cnap_toggle', 'cnap_ajax_toggle');
 function cnap_ajax_toggle() {
     if (!current_user_can('manage_options')) {
-        wp_send_json_error('Недостаточно прав');
+        wp_send_json_error(__('Недостаточно прав', 'crypto-news-auto-poster'));
     }
     check_ajax_referer('cnap_ajax', 'nonce');
 
@@ -450,7 +452,7 @@ function cnap_ajax_toggle() {
         update_option('cnap_enabled', 0);
         update_option('cnap_stats', $stats);
         wp_clear_scheduled_hook('cnap_cron');
-        wp_send_json_success('⏸️ Остановлен');
+        wp_send_json_success(__('⏸️ Остановлен', 'crypto-news-auto-poster'));
     } else {
         $stats['start_time'] = time();
         $stats['uptime'] = 0;
@@ -458,25 +460,25 @@ function cnap_ajax_toggle() {
         update_option('cnap_stats', $stats);
         wp_clear_scheduled_hook('cnap_cron');
         wp_schedule_event(time() + 60, $interval, 'cnap_cron');
-        wp_send_json_success('✅ Запущен!');
+        wp_send_json_success(__('✅ Запущен!', 'crypto-news-auto-poster'));
     }
 }
 
 add_action('wp_ajax_cnap_fetch', 'cnap_ajax_fetch');
 function cnap_ajax_fetch() {
     if (!current_user_can('manage_options')) {
-        wp_send_json_error('Недостаточно прав');
+        wp_send_json_error(__('Недостаточно прав', 'crypto-news-auto-poster'));
     }
     check_ajax_referer('cnap_ajax', 'nonce');
 
     $result = cnap_get_news();
 
-    $msg = '<strong>📊 РЕЗУЛЬТАТ:</strong><br><br>';
-    $msg .= 'Найдено: ' . $result['fetched'] . '<br>';
-    $msg .= 'Опубликовано: ' . $result['published'] . '<br>';
-    $msg .= 'Пропущено: ' . $result['skipped'] . '<br>';
+    $msg = '<strong>' . esc_html__('📊 РЕЗУЛЬТАТ:', 'crypto-news-auto-poster') . '</strong><br><br>';
+    $msg .= esc_html(sprintf(__('Найдено: %d', 'crypto-news-auto-poster'), $result['fetched'])) . '<br>';
+    $msg .= esc_html(sprintf(__('Опубликовано: %d', 'crypto-news-auto-poster'), $result['published'])) . '<br>';
+    $msg .= esc_html(sprintf(__('Пропущено: %d', 'crypto-news-auto-poster'), $result['skipped'])) . '<br>';
     if ($result['total_photos'] > 0) {
-        $msg .= 'Фото: ' . $result['total_photos'];
+        $msg .= esc_html(sprintf(__('Фото: %d', 'crypto-news-auto-poster'), $result['total_photos']));
     }
 
     wp_send_json_success($msg);
@@ -806,7 +808,7 @@ function cnap_deep_parse_v35($url, $stopwords) {
                     $insert_pos = min($interval * ($i + 1), $para_count - 1);
                 }
 
-                $img_html = '<figure class="cnap-figure"><img src="' . esc_url($img_data['src']) . '" alt="Crypto News">';
+                $img_html = '<figure class="cnap-figure"><img src="' . esc_url($img_data['src']) . '" alt="' . esc_attr__('Crypto News', 'crypto-news-auto-poster') . '">';
 
                 if (!empty($img_data['caption'])) {
                     $img_html .= '<figcaption><strong>' . esc_html($img_data['caption']) . '</strong></figcaption>';
@@ -823,7 +825,7 @@ function cnap_deep_parse_v35($url, $stopwords) {
         } else {
             for ($i = 0; $i < $max_photos; $i++) {
                 $img_data = $all_images[$i];
-                $img_html = '<figure class="cnap-figure"><img src="' . esc_url($img_data['src']) . '" alt="Crypto News">';
+                $img_html = '<figure class="cnap-figure"><img src="' . esc_url($img_data['src']) . '" alt="' . esc_attr__('Crypto News', 'crypto-news-auto-poster') . '">';
 
                 if (!empty($img_data['caption'])) {
                     $img_html .= '<figcaption><strong>' . esc_html($img_data['caption']) . '</strong></figcaption>';
