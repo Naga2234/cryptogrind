@@ -26,6 +26,7 @@ function cnap_install() {
     add_option('cnap_cache_ttl', 300);
     add_option('cnap_log_errors', 0);
     add_option('cnap_last_published', 0);
+    add_option('cnap_min_photos', 0);
     add_option('cnap_stats', array(
         'total_checked' => 0,
         'total_published' => 0,
@@ -225,6 +226,7 @@ function cnap_page() {
     $count = get_option('cnap_count', 3);
     $interval = get_option('cnap_interval', 'five_minutes');
     $stopwords = get_option('cnap_stopwords', '');
+    $min_photos = intval(get_option('cnap_min_photos', 0));
     $selected_sources = cnap_get_selected_sources();
     $available_sources = cnap_get_available_sources();
 
@@ -329,6 +331,8 @@ function cnap_page() {
                     </select>
                     <label class="cnap-form__label"><strong><?php esc_html_e('Постов:', 'crypto-news-auto-poster'); ?></strong></label><br>
                     <input type="number" name="count" value="<?php echo esc_attr($count); ?>" min="1" max="20" class="cnap-form__field">
+                    <label class="cnap-form__label"><strong><?php esc_html_e('Минимум фото:', 'crypto-news-auto-poster'); ?></strong></label><br>
+                    <input type="number" name="min_photos" value="<?php echo esc_attr($min_photos); ?>" min="0" max="5" class="cnap-form__field">
                     <label class="cnap-form__label"><strong><?php esc_html_e('Источники:', 'crypto-news-auto-poster'); ?></strong></label><br>
                     <div class="cnap-checkboxes">
                         <?php foreach ($available_sources as $key => $source): ?>
@@ -407,6 +411,7 @@ function cnap_page() {
     if (isset($_POST['cnap_save_settings'])) {
         check_admin_referer('cnap_save_settings', 'cnap_settings_nonce');
         update_option('cnap_count', intval($_POST['count']));
+        update_option('cnap_min_photos', max(0, intval($_POST['min_photos'] ?? 0)));
         $new_interval = sanitize_text_field($_POST['interval']);
         $available_sources = cnap_get_available_sources();
         $sources_input = isset($_POST['sources']) ? (array) $_POST['sources'] : array();
@@ -497,6 +502,7 @@ function cnap_get_news() {
     $count = get_option('cnap_count', 3);
     $stopwords_text = get_option('cnap_stopwords', '');
     $stopwords = array_filter(array_map('trim', explode("\n", $stopwords_text)));
+    $min_photos = intval(get_option('cnap_min_photos', 0));
     $selected_sources = cnap_get_selected_sources();
     $available_sources = cnap_get_available_sources();
     $last_published = intval(get_option('cnap_last_published', 0));
@@ -548,15 +554,12 @@ function cnap_get_news() {
                 continue;
             }
 
-            if ($last_published > 0) {
-                if ($date <= 0 || $date <= $last_published) {
-                    $stats['skipped']++;
-                    continue;
-                }
-            }
-
             if ($date <= 0) {
                 $date = $now;
+            }
+            if ($last_published > 0 && $date > 0 && $date <= $last_published) {
+                $stats['skipped']++;
+                continue;
             }
 
             $seen_links[$link] = true;
@@ -582,11 +585,12 @@ function cnap_get_news() {
 
         $full = cnap_deep_parse_v35($item['link'], $stopwords);
 
-        if (empty($full['content']) || $full['photos_count'] == 0) {
+        if (empty($full['content']) || $full['photos_count'] < $min_photos) {
             cnap_log_error('parsed content empty', array(
                 'link' => $item['link'],
                 'title' => $item['title'],
-                'photos_count' => $full['photos_count']
+                'photos_count' => $full['photos_count'],
+                'min_photos' => $min_photos
             ));
             $stats['skipped']++;
             continue;
