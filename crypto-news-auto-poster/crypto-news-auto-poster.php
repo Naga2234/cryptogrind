@@ -543,7 +543,7 @@ function cnap_get_news() {
 
             $full = cnap_deep_parse_v35($link, $stopwords);
 
-            if (empty($full['content']) || empty($full['featured_image']) || $full['photos_count'] == 0) {
+            if (empty($full['content']) || $full['photos_count'] == 0) {
                 cnap_log_error('parsed content empty', array(
                     'link' => $link,
                     'title' => $title,
@@ -770,6 +770,12 @@ function cnap_deep_parse_v35($url, $stopwords) {
     $content_html = preg_replace('/[ \t]+/', ' ', $content_html);
     $content_html = preg_replace('/<p>\s+/', '<p>', $content_html);
     $content_html = preg_replace('/\s+<\/p>/', '</p>', $content_html);
+    if (!preg_match('/<p\b[^>]*>/i', $content_html)) {
+        $content_html = wpautop($content_html);
+    }
+
+    $content_html = cnap_emphasize_first_paragraph($content_html);
+
     $allowed_tags = wp_kses_allowed_html('post');
     $allowed_tags['figure'] = array(
         'class' => true,
@@ -789,17 +795,24 @@ function cnap_deep_parse_v35($url, $stopwords) {
     $content_html = wp_kses($content_html, $allowed_tags);
 
     if (count($all_images) > 0) {
+        $content_images = $all_images;
+        if (!empty($result['featured_image'])) {
+            $content_images = array_values(array_filter($content_images, function($img) use ($result) {
+                return $img['src'] !== $result['featured_image'];
+            }));
+        }
+
         $paragraphs = preg_split('/(<\/p>)/', $content_html, -1, PREG_SPLIT_DELIM_CAPTURE);
         $para_count = count($paragraphs);
         $paragraph_count = preg_match_all('/<p\b[^>]*>.*?<\/p>/is', $content_html);
         $min_paragraphs_for_spread = 3;
 
-        $max_photos = min(count($all_images), 5);
+        $max_photos = min(count($content_images), 5);
         $inserted = 0;
 
         if ($paragraph_count >= $min_paragraphs_for_spread && $para_count > 2) {
             for ($i = 0; $i < $max_photos; $i++) {
-                $img_data = $all_images[$i];
+                $img_data = $content_images[$i];
 
                 if ($i == 0) {
                     $insert_pos = 2;
@@ -824,7 +837,7 @@ function cnap_deep_parse_v35($url, $stopwords) {
             $content_html = implode('', $paragraphs);
         } else {
             for ($i = 0; $i < $max_photos; $i++) {
-                $img_data = $all_images[$i];
+                $img_data = $content_images[$i];
                 $img_html = '<figure class="cnap-figure"><img src="' . esc_url($img_data['src']) . '" alt="' . esc_attr__('Crypto News', 'crypto-news-auto-poster') . '">';
 
                 if (!empty($img_data['caption'])) {
@@ -840,11 +853,46 @@ function cnap_deep_parse_v35($url, $stopwords) {
 
     $result['content'] = trim($content_html);
 
+    if (empty($result['featured_image']) && !empty($all_images)) {
+        $result['featured_image'] = $all_images[0]['src'];
+    }
+
     set_transient($cache_key, $result, cnap_get_cache_ttl());
     return $result;
 }
 
+function cnap_emphasize_first_paragraph($content_html) {
+    $dom = new DOMDocument();
+    libxml_use_internal_errors(true);
+    @$dom->loadHTML('<?xml encoding="UTF-8"><div>' . $content_html . '</div>');
+    libxml_clear_errors();
+
+    $xpath = new DOMXPath($dom);
+    $paragraph = $xpath->query('//div/p')->item(0);
+    if (!$paragraph) {
+        return $content_html;
+    }
+
+    $strong = $dom->createElement('strong');
+    while ($paragraph->firstChild) {
+        $strong->appendChild($paragraph->removeChild($paragraph->firstChild));
+    }
+    $paragraph->appendChild($strong);
+
+    $container = $xpath->query('//div')->item(0);
+    $updated_html = '';
+    foreach ($container->childNodes as $child) {
+        $updated_html .= $dom->saveHTML($child);
+    }
+
+    return $updated_html;
+}
+
 function cnap_set_thumb($post_id, $url) {
+    if (empty($url)) {
+        return;
+    }
+
     require_once(ABSPATH . 'wp-admin/includes/media.php');
     require_once(ABSPATH . 'wp-admin/includes/file.php');
     require_once(ABSPATH . 'wp-admin/includes/image.php');
